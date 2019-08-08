@@ -1,43 +1,60 @@
 import React from 'react';
 import PropTypes from 'prop-types';
-import {omit, isEmpty} from 'ramda';
+import {isEmpty, isNil, omit} from 'ramda';
+import isNumeric from 'fast-isnumeric';
 import classNames from 'classnames';
+
+const convert = val => (isNumeric(val) ? +val : NaN);
+const isEquivalent = (v1, v2) => v1 === v2 || (isNaN(v1) && isNaN(v2));
 
 class Input extends React.Component {
   constructor(props) {
     super(props);
-    if (!props.setProps || props.debounce) {
-      this.state = {value: props.value};
-    }
+
+    this.input = React.createRef();
+
+    this.onBlur = this.onBlur.bind(this);
+    this.onChange = this.onChange.bind(this);
+    this.onEvent = this.onEvent.bind(this);
+    this.onKeyPress = this.onKeyPress.bind(this);
+    this.setInputValue = this.setInputValue.bind(this);
+    this.setPropValue = this.setPropValue.bind(this);
   }
 
   componentWillReceiveProps(nextProps) {
-    this.setState({value: nextProps.value});
-    if (this.props.setProps) {
-      this.props = nextProps;
+    const {value, valueAsNumber} = this.input.current;
+    this.setInputValue(
+      isNil(valueAsNumber) ? value : valueAsNumber,
+      nextProps.value
+    );
+    if (this.props.type !== 'number') {
+      this.setState({value: nextProps.value});
+    }
+  }
+
+  componentDidMount() {
+    const {value, valueAsNumber} = this.input.current;
+    this.setInputValue(
+      isNil(valueAsNumber) ? value : valueAsNumber,
+      this.props.value
+    );
+  }
+
+  componentWillMount() {
+    if (this.props.type !== 'number') {
+      this.setState({value: this.props.value});
     }
   }
 
   render() {
     const {
-      setProps,
-      type,
       className,
       valid,
       invalid,
       bs_size,
       plaintext,
-      key,
-      debounce,
-      min,
-      max,
       loading_state
     } = this.props;
-    const {value} = setProps
-      ? debounce
-        ? this.state
-        : this.props
-      : this.state;
 
     let formControlClass = 'form-control';
 
@@ -50,54 +67,20 @@ class Input extends React.Component {
       invalid && 'is-invalid',
       valid && 'is-valid',
       bs_size ? `form-control-${bs_size}` : false,
-      formControlClass,
-      debounce
+      formControlClass
     );
+
+    const valprops =
+      this.props.type === 'number' ? {} : {value: this.state.value};
+
     return (
       <input
-        onChange={e => {
-          const newValue = e.target.value;
-          if (
-            (!isEmpty(min) && Number(newValue) < min) ||
-            (!isEmpty(max) && Number(newValue) > max)
-          ) {
-            return;
-          }
-          if (!debounce && setProps) {
-            const castValue = type === 'number' ? Number(newValue) : newValue;
-            setProps({
-              value: castValue
-            });
-          } else {
-            this.setState({value: newValue});
-          }
-        }}
-        onBlur={() => {
-          if (setProps) {
-            const payload = {
-              n_blur: this.props.n_blur + 1,
-              n_blur_timestamp: Date.now()
-            };
-            if (debounce) {
-              payload.value = type === 'number' ? Number(value) : value;
-            }
-            setProps(payload);
-          }
-        }}
-        onKeyPress={e => {
-          if (setProps && e.key === 'Enter') {
-            const payload = {
-              n_submit: this.props.n_submit + 1,
-              n_submit_timestamp: Date.now()
-            };
-            if (debounce) {
-              payload.value = type === 'number' ? Number(value) : value;
-            }
-            setProps(payload);
-          }
-        }}
+        ref={this.input}
+        onChange={this.onChange}
+        onBlur={this.onBlur}
+        onKeyPress={this.onKeyPress}
         className={classes}
-        value={value}
+        {...valprops}
         {...omit(
           [
             'debounce',
@@ -124,6 +107,65 @@ class Input extends React.Component {
         }
       />
     );
+  }
+
+  setInputValue(base, value) {
+    const __value = value;
+    base = this.input.current.checkValidity() ? convert(base) : NaN;
+    value = convert(value);
+
+    if (!isEquivalent(base, value)) {
+      this.input.current.value = isNumeric(value) ? value : __value;
+    }
+  }
+
+  setPropValue(base, value) {
+    base = convert(base);
+    value = this.input.current.checkValidity() ? convert(value) : NaN;
+
+    if (!isEquivalent(base, value)) {
+      this.props.setProps({value});
+    }
+  }
+
+  onEvent() {
+    const {value, valueAsNumber} = this.input.current;
+    if (this.props.type === 'number') {
+      this.setPropValue(
+        this.props.value,
+        isNil(valueAsNumber) ? value : valueAsNumber
+      );
+    } else {
+      this.props.setProps({value});
+    }
+  }
+
+  onBlur() {
+    this.props.setProps({
+      n_blur: this.props.n_blur + 1,
+      n_blur_timestamp: Date.now()
+    });
+    this.input.current.checkValidity();
+    return this.props.debounce && this.onEvent();
+  }
+
+  onKeyPress(e) {
+    if (e.key === 'Enter') {
+      this.props.setProps({
+        n_submit: this.props.n_submit + 1,
+        n_submit_timestamp: Date.now()
+      });
+      this.input.current.checkValidity();
+    }
+    return this.props.debounce && e.key === 'Enter' && this.onEvent();
+  }
+
+  onChange() {
+    if (!this.props.debounce) {
+      this.onEvent();
+    } else if (this.props.type !== 'number') {
+      this.setState({value: this.input.current.value});
+    }
   }
 }
 
@@ -176,7 +218,10 @@ Input.propTypes = {
   /**
    * Set to True to disable the Input.
    */
-  disabled: PropTypes.bool,
+  disabled: PropTypes.oneOfType([
+    PropTypes.oneOf(['disabled', 'DISABLED']),
+    PropTypes.bool
+  ]),
 
   /**
    * This attribute indicates whether the value of the control can be
@@ -417,11 +462,13 @@ Input.propTypes = {
 };
 
 Input.defaultProps = {
+  type: 'text',
   n_blur: 0,
   n_blur_timestamp: -1,
   n_submit: 0,
   n_submit_timestamp: -1,
-  debounce: false
+  debounce: false,
+  step: 'any'
 };
 
 export default Input;
